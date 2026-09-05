@@ -1,10 +1,12 @@
 """
 Vigila la carpeta `input/` y procesa automáticamente cada foto nueva que
-aparezca (subida, copiada o movida ahí). Correr con:
+aparezca ahí puesta a mano (fuera de la interfaz web). Correr con:
 
     python watcher.py
 
-Dejarlo corriendo en segundo plano (o como tarea programada / servicio).
+Es un modo de ingesta alternativo al drag&drop: comparte exactamente el
+mismo motor de procesamiento (pipeline.py) y la misma base de datos, así
+que puede convivir con la interfaz web sin pisarse.
 """
 import os
 import time
@@ -14,7 +16,7 @@ from watchdog.events import FileSystemEventHandler
 
 import db
 from config import INPUT_DIR, VALID_EXTS
-from pipeline import process_photo
+from pipeline import register_existing_file, process_pending_queue
 
 
 def is_image(path: str) -> bool:
@@ -37,7 +39,7 @@ class NewPhotoHandler(FileSystemEventHandler):
     Objetivo:
         Reaccionar a los eventos del sistema de archivos dentro de
         `input/` (archivo creado o movido/renombrado) y disparar el
-        procesamiento de la foto correspondiente.
+        registro + procesamiento de la foto correspondiente.
     """
 
     def on_created(self, event):
@@ -45,7 +47,7 @@ class NewPhotoHandler(FileSystemEventHandler):
         Objetivo:
             Manejar el evento "se creó un archivo nuevo" en la carpeta
             vigilada. Si es una imagen, espera a que termine de copiarse
-            y la procesa.
+            y la registra/procesa.
 
         Argumentos:
             event (watchdog.events.FileSystemEvent): evento emitido por
@@ -57,7 +59,7 @@ class NewPhotoHandler(FileSystemEventHandler):
         if event.is_directory or not is_image(event.src_path):
             return
         self._wait_until_stable(event.src_path)
-        self._process(event.src_path)
+        self._register_and_process(event.src_path)
 
     def on_moved(self, event):
         """
@@ -75,7 +77,7 @@ class NewPhotoHandler(FileSystemEventHandler):
         """
         if event.is_directory or not is_image(event.dest_path):
             return
-        self._process(event.dest_path)
+        self._register_and_process(event.dest_path)
 
     def _wait_until_stable(self, path, checks=3, interval=0.5):
         """
@@ -108,21 +110,22 @@ class NewPhotoHandler(FileSystemEventHandler):
                 last_size = size
             time.sleep(interval)
 
-    def _process(self, path):
+    def _register_and_process(self, path):
         """
         Objetivo:
-            Ejecutar el pipeline de procesamiento sobre una foto y
-            registrar en consola cualquier error, sin interrumpir al
-            watcher (para que siga vigilando aunque una foto falle).
+            Dar de alta el archivo (si su contenido no estaba ya registrado)
+            y vaciar la cola de pendientes, registrando en consola cualquier
+            error sin interrumpir al watcher.
 
         Argumentos:
-            path (str): ruta de la foto a procesar.
+            path (str): ruta de la foto a registrar y procesar.
 
         Devuelve:
             None
         """
         try:
-            process_photo(path)
+            register_existing_file(path)
+            process_pending_queue()
         except Exception as exc:
             print(f"[ERROR] No se pudo procesar {path}: {exc}")
 
@@ -130,9 +133,9 @@ class NewPhotoHandler(FileSystemEventHandler):
 def backfill_existing():
     """
     Objetivo:
-        Procesar las fotos que ya estaban en `input/` antes de arrancar el
-        watcher (por ejemplo, si se cargaron varias de una mientras el
-        watcher estaba apagado).
+        Registrar y procesar las fotos que ya estaban en `input/` antes de
+        arrancar el watcher (por ejemplo, si se copiaron varias a mano
+        mientras el watcher estaba apagado).
 
     Argumentos:
         (ninguno)
@@ -144,17 +147,18 @@ def backfill_existing():
         path = os.path.join(INPUT_DIR, name)
         if os.path.isfile(path) and is_image(path):
             try:
-                process_photo(path)
+                register_existing_file(path)
             except Exception as exc:
-                print(f"[ERROR] No se pudo procesar {path}: {exc}")
+                print(f"[ERROR] No se pudo registrar {path}: {exc}")
+    process_pending_queue()
 
 
 def main():
     """
     Objetivo:
-        Punto de entrada del watcher: inicializa la base de datos, procesa
-        lo que ya hubiera en `input/`, y después queda vigilando la
-        carpeta en segundo plano hasta que se lo interrumpa (Ctrl+C).
+        Punto de entrada del watcher: inicializa la base de datos, registra
+        y procesa lo que ya hubiera en `input/`, y después queda vigilando
+        la carpeta en segundo plano hasta que se lo interrumpa (Ctrl+C).
 
     Argumentos:
         (ninguno)

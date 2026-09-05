@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>face-index</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 720px;
+    margin: 3rem auto;
+    padding: 0 1rem;
+  }
+  h1 { font-size: 1.3rem; margin-bottom: .25rem; }
+  p.subtitle { color: #777; margin-top: 0; }
+
+  #dropzone {
+    border: 2px dashed #999;
+    border-radius: 10px;
+    padding: 3rem 1rem;
+    text-align: center;
+    color: #777;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone.dragover {
+    border-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.08);
+    color: #3b82f6;
+  }
+  #fileInput { display: none; }
+
+  #list { margin-top: 1.5rem; display: flex; flex-direction: column; gap: .5rem; }
+  .row {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: .6rem .9rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  .row .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .info { font-size: .85rem; text-align: right; }
+  .status-pending, .status-processing { color: #a16207; }
+  .status-done { color: #15803d; }
+  .status-error { color: #b91c1c; }
+</style>
+</head>
+<body>
+
+  <h1>face-index</h1>
+  <p class="subtitle">Arrastrá tus fotos acá. El sistema detecta y reconoce rostros; nunca guarda las imágenes de los recortes, solo coordenadas.</p>
+
+  <div id="dropzone">
+    Soltá las imágenes acá, o hacé clic para elegirlas
+    <input id="fileInput" type="file" accept="image/*" multiple>
+  </div>
+
+  <div id="list"></div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const list = document.getElementById('list');
+
+// Abrir el selector de archivos al hacer clic en la zona
+dropzone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+// Resaltar la zona mientras se arrastra algo encima
+['dragenter', 'dragover'].forEach(evt =>
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    dropzone.classList.add('dragover');
+  })
+);
+['dragleave', 'drop'].forEach(evt =>
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+  })
+);
+dropzone.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
+
+/**
+ * Objetivo:
+ *     Tomar los archivos soltados o elegidos, mostrarlos de inmediato en
+ *     la lista como "subiendo...", y enviarlos al servidor.
+ * Argumentos:
+ *     fileList (FileList): archivos entregados por el navegador (drag&drop o input).
+ * Devuelve:
+ *     (nada) — dispara la subida y arranca el seguimiento en vivo de cada foto.
+ */
+function handleFiles(fileList) {
+  const files = Array.from(fileList);
+  if (files.length === 0) return;
+
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+
+  fetch('/upload', { method: 'POST', body: formData })
+    .then(res => res.json())
+    .then(data => {
+      (data.photos || []).forEach(photo => {
+        if (photo.error) {
+          renderError(photo.original_filename, photo.error);
+        } else {
+          renderRow(photo.id, photo.original_filename);
+          pollStatus(photo.id);
+        }
+      });
+    })
+    .catch(err => renderError('(subida)', err.message));
+}
+
+/**
+ * Objetivo:
+ *     Crear (o reutilizar) la fila visual de una foto en la lista, con un
+ *     estado inicial de "pendiente".
+ * Argumentos:
+ *     id (number): id de la foto en la base de datos.
+ *     filename (string): nombre original del archivo, para mostrarlo.
+ * Devuelve:
+ *     HTMLElement: el nodo de la fila, para poder actualizarlo después.
+ */
+function renderRow(id, filename) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.id = `photo-${id}`;
+  row.innerHTML = `
+    <span class="name">${filename}</span>
+    <span class="info status-pending">pendiente...</span>
+  `;
+  list.prepend(row);
+  return row;
+}
+
+/**
+ * Objetivo:
+ *     Mostrar una fila de error para un archivo que ni siquiera se llegó
+ *     a subir (extensión no soportada, demasiado grande, falla de red).
+ * Argumentos:
+ *     filename (string): nombre del archivo que falló.
+ *     message (string): motivo del error, para mostrarlo al usuario.
+ * Devuelve:
+ *     (nada)
+ */
+function renderError(filename, message) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `
+    <span class="name">${filename}</span>
+    <span class="info status-error">${message}</span>
+  `;
+  list.prepend(row);
+}
+
+/**
+ * Objetivo:
+ *     Consultar cada cierto tiempo el estado de una foto ya subida, y
+ *     actualizar su fila en pantalla, hasta que termine (bien o con error).
+ * Argumentos:
+ *     id (number): id de la foto a seguir.
+ * Devuelve:
+ *     (nada) — arranca un intervalo que se cancela solo al terminar.
+ */
+function pollStatus(id) {
+  const interval = setInterval(() => {
+    fetch(`/api/photos/${id}`)
+      .then(res => res.json())
+      .then(photo => {
+        const row = document.getElementById(`photo-${id}`);
+        if (!row) { clearInterval(interval); return; }
+        const info = row.querySelector('.info');
+
+        if (photo.status === 'pending' || photo.status === 'processing') {
+          info.textContent = photo.status === 'pending' ? 'pendiente...' : 'procesando...';
+          info.className = `info status-${photo.status}`;
+        } else if (photo.status === 'done') {
+          const personas = new Set(photo.faces.map(f => f.person_id)).size;
+          info.textContent = photo.faces_count === 0
+            ? 'sin rostros detectados'
+            : `${photo.faces_count} rostro(s) · ${personas} persona(s)`;
+          info.className = 'info status-done';
+          clearInterval(interval);
+        } else if (photo.status === 'error') {
+          info.textContent = `error: ${photo.error_message}`;
+          info.className = 'info status-error';
+          clearInterval(interval);
+        }
+      })
+      .catch(() => clearInterval(interval));
+  }, 700);
+}
+</script>
+</body>
+</html>
