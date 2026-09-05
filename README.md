@@ -38,7 +38,7 @@ face-index/
 ## Instalación (Windows, PowerShell)
 
 ```powershell
-cd C:\Users\Win11\Desktop\DEV_0\face-index
+cd face-index
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
