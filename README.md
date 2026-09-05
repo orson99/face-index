@@ -108,11 +108,3 @@ parecidos tienen que ser dos rostros para considerarlos la misma persona.
 Subirlo (ej. 0.6) es más estricto (menos falsos positivos, puede duplicar
 personas); bajarlo (ej. 0.4) es más laxo (puede juntar personas distintas).
 
-## Nota sobre el intento anterior
-
-Ya existía una carpeta `recfac/` en la misma `DEV_0` con una app Flask que
-detectaba rostros con Haar cascades y guardaba miniaturas como archivos
-JPG. Este proyecto es una versión distinta y separada: usa un detector más
-preciso con reconocimiento real (embeddings), separa nombre original de
-nombre de sistema, evita duplicados por contenido, y no persiste ninguna
-imagen — solo números en SQLite.
