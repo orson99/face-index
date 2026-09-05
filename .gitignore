@@ -1,0 +1,13 @@
+# Entornos virtuales
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Datos y fotos de entrada: no van al repo (son datos personales / generados)
+input/*
+!input/.gitkeep
+data/*.db
+
+# Modelos descargados por insightface (se descargan solos, no hace falta versionarlos)
+*.onnx
